@@ -4,9 +4,11 @@ Device detection module for automatically finding displays and audio devices.
 """
 import re
 import json
-from typing import Dict, List, Optional, Tuple
+import os
+from typing import Dict, List, Optional, Tuple, Any
 from utils.shell import run_command
 from utils.logger import logger
+from config.settings import CONFIG_DIR, save_device_cache
 
 def get_displays() -> List[Dict]:
     """
@@ -167,7 +169,7 @@ def _parse_pipewire_devices(stdout: str) -> Dict[str, List[Dict]]:
     
     return devices
 
-def get_device_info() -> Dict:
+def get_device_info() -> Dict[str, Any]:
     """
     Get comprehensive information about all detected devices.
     
@@ -222,31 +224,85 @@ def find_audio_by_keyword(keyword: str, device_type: str = 'outputs',
     keyword = keyword.lower()
     for device in devices[device_type]:
         if (keyword in device['name'].lower() or 
-            keyword in device['description'].lower()):
+            (device.get('description') and keyword in device['description'].lower())):
             return device
     
     return None
 
-def save_detected_devices(filename: str = 'detected_devices.json') -> None:
+def save_detected_devices(filename: str = 'detected_devices.json') -> bool:
     """
     Detect all devices and save to a JSON file.
     
     Args:
         filename: Path to save the JSON data.
+        
+    Returns:
+        True if successful, False otherwise
     """
     devices = get_device_info()
+    
+    # If not an absolute path, save to config directory
+    if not os.path.isabs(filename):
+        filename = os.path.join(CONFIG_DIR, filename)
     
     try:
         with open(filename, 'w') as f:
             json.dump(devices, f, indent=2)
         logger.info(f"Device information saved to {filename}")
+        return True
     except Exception as e:
-        logger.error(f"Failed to save device information: {e}")
+        logger.error(f"Error saving device information: {e}")
+        return False
+
+def get_available_displays() -> List[Dict[str, str]]:
+    """
+    Get a simplified list of available displays.
+    
+    Returns:
+        List of dictionaries with display information in a simple format.
+    """
+    displays = get_displays()
+    return [{"name": d["name"], "description": f"{d['name']} - {'Primary' if d.get('primary') else 'Secondary'}"} 
+            for d in displays if d["status"] == "connected"]
+
+def get_available_audio_devices() -> Dict[str, List[Dict[str, str]]]:
+    """
+    Get a simplified list of available audio devices.
+    
+    Returns:
+        Dictionary with 'inputs' and 'outputs' lists in a simple format.
+    """
+    audio_devices = get_audio_devices()
+    
+    simplified = {
+        "outputs": [],
+        "inputs": []
+    }
+    
+    for device_type in ["outputs", "inputs"]:
+        for device in audio_devices.get(device_type, []):
+            simplified[device_type].append({
+                "name": device["name"],
+                "description": device.get("description", device["name"]),
+                "default": device.get("default", False)
+            })
+    
+    return simplified
 
 if __name__ == "__main__":
     # When run directly, print detected devices
     devices = get_device_info()
     print(json.dumps(devices, indent=2))
+
+    # Also print a formatted version for easier reading
+    print("\nDisplays:")
+    for display in get_available_displays():
+        print(f"  {display['name']}: {display['description']}")
     
-    # Save to file
-    save_detected_devices()
+    print("\nAudio outputs:")
+    for device in get_available_audio_devices()["outputs"]:
+        print(f"  {device['name']}: {device['description']} {'(default)' if device['default'] else ''}")
+    
+    print("\nAudio inputs:")
+    for device in get_available_audio_devices()["inputs"]:
+        print(f"  {device['name']}: {device['description']} {'(default)' if device['default'] else ''}")

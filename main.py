@@ -14,6 +14,7 @@ from core.audio import AudioManager
 from core.detection import get_device_info, save_detected_devices
 from config.devices import DeviceMapper
 from config.settings import load_config, save_config, update_config
+from config.profiles import list_profiles, create_profile, get_profile, delete_profile, apply_profile, build_profile_from_detected_devices
 from utils.logger import logger, set_verbose
 from utils.shell import check_dependency
 
@@ -69,7 +70,13 @@ def detect_command(args) -> None:
 
 def apply_command(args) -> None:
     """Handle the 'apply' command."""
-    if args.macro == "desk":
+    if args.profile:
+        # Apply a saved profile
+        result = apply_profile(args.profile)
+        if not result:
+            logger.error(f"Failed to apply profile: {args.profile}")
+            sys.exit(1)
+    elif args.macro == "desk":
         result = apply_desk_mode()
     elif args.macro == "tv":
         result = apply_tv_mode()
@@ -152,6 +159,75 @@ def config_command(args) -> None:
         save_config(DEFAULT_CONFIG, DEFAULT_CONFIG_FILE)
         logger.info("Configuration reset to defaults")
 
+def profile_command(args) -> None:
+    """Handle the 'profile' command."""
+    if args.list:
+        # List available profiles
+        profiles = list_profiles()
+        if not profiles:
+            print("No profiles found.")
+            return
+        
+        print("Available profiles:")
+        for profile in profiles:
+            print(f"  {profile['display_name']}: {profile['description']}")
+    
+    elif args.create:
+        # Create a profile based on current device state
+        description = args.description or f"Profile created on {os.popen('date').read().strip()}"
+        profile_config = build_profile_from_detected_devices(args.create, description)
+        
+        # Allow the user to specify primary display
+        if args.primary_display:
+            for display_name, display in profile_config["displays"].items():
+                display["primary"] = display_name == args.primary_display
+                if display_name == args.primary_display:
+                    display["enabled"] = True
+        
+        # Allow the user to specify additional displays to enable
+        if args.enable_displays:
+            for display_name in args.enable_displays.split(','):
+                display_name = display_name.strip()
+                if display_name in profile_config["displays"]:
+                    profile_config["displays"][display_name]["enabled"] = True
+        
+        # Allow the user to specify audio output
+        if args.audio_output:
+            profile_config["audio"]["output"] = args.audio_output
+        
+        # Allow the user to specify audio input
+        if args.audio_input:
+            profile_config["audio"]["input"] = args.audio_input
+        
+        # Allow the user to specify volume
+        if args.volume is not None:
+            profile_config["audio"]["volume"] = args.volume
+        
+        result = create_profile(args.create, profile_config)
+        if not result:
+            logger.error(f"Failed to create profile: {args.create}")
+            sys.exit(1)
+        
+        logger.info(f"Profile '{args.create}' created successfully")
+    
+    elif args.delete:
+        # Delete a profile
+        result = delete_profile(args.delete)
+        if not result:
+            logger.error(f"Failed to delete profile: {args.delete}")
+            sys.exit(1)
+        
+        logger.info(f"Profile '{args.delete}' deleted successfully")
+    
+    elif args.show:
+        # Show profile configuration
+        profile = get_profile(args.show)
+        if not profile:
+            logger.error(f"Profile not found: {args.show}")
+            sys.exit(1)
+        
+        print(json.dumps(profile, indent=2))
+
 def main() -> None:
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Screen and Audio Manager")
@@ -164,9 +240,11 @@ def main() -> None:
     detect_parser.add_argument('-s', '--save', help="Save detection results to file")
     
     # Apply command
-    apply_parser = subparsers.add_parser('apply', help="Apply a macro")
-    apply_parser.add_argument('macro', choices=['desk', 'tv', 'dual'], 
+    apply_parser = subparsers.add_parser('apply', help="Apply a macro or profile")
+    apply_group = apply_parser.add_mutually_exclusive_group(required=True)
+    apply_group.add_argument('macro', nargs='?', choices=['desk', 'tv', 'dual'], 
                              help="Macro to apply")
+    apply_group.add_argument('-p', '--profile', help="Profile to apply")
     
     # Display command
     display_parser = subparsers.add_parser('display', help="Manage displays")
@@ -193,6 +271,22 @@ def main() -> None:
     config_group.add_argument('-s', '--show', action='store_true', help="Show current config")
     config_group.add_argument('-u', '--update', help="Update config from JSON file")
     config_group.add_argument('-r', '--reset', action='store_true', help="Reset to default config")
+    
+    # Profile command
+    profile_parser = subparsers.add_parser('profile', help="Manage profiles")
+    profile_group = profile_parser.add_mutually_exclusive_group(required=True)
+    profile_group.add_argument('-l', '--list', action='store_true', help="List available profiles")
+    profile_group.add_argument('-c', '--create', help="Create a new profile with the given name")
+    profile_group.add_argument('-d', '--delete', help="Delete a profile")
+    profile_group.add_argument('-s', '--show', help="Show profile configuration")
+    
+    # Profile creation options
+    profile_parser.add_argument('--description', help="Description for the new profile")
+    profile_parser.add_argument('--primary-display', help="Set primary display for the profile")
+    profile_parser.add_argument('--enable-displays', help="Comma-separated list of displays to enable")
+    profile_parser.add_argument('--audio-output', help="Set default audio output for the profile")
+    profile_parser.add_argument('--audio-input', help="Set default audio input for the profile")
+    profile_parser.add_argument('--volume', type=int, help="Set volume level for the profile (0-100)")
     
     args = parser.parse_args()
     
@@ -222,6 +316,8 @@ def main() -> None:
             audio_command(args)
         elif args.command == 'config':
             config_command(args)
+        elif args.command == 'profile':
+            profile_command(args)
     except KeyboardInterrupt:
         logger.info("Operation cancelled by user")
         sys.exit(130)

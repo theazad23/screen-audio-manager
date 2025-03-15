@@ -126,13 +126,16 @@ class DisplayManager:
             logger.error(f"Display {display_name} not found")
             return False
         
+        # Make sure we run the primary command on an enabled display
         cmd = f"xrandr --output {display['name']} --primary"
+        logger.debug(f"Executing primary display command: {cmd}")
         result = run_command(cmd)
         
         if result.returncode != 0:
             logger.error(f"Failed to set primary display: {result.stderr}")
             return False
         
+        logger.debug(f"Set {display_name} as primary display successfully")
         self.refresh()
         return True
     
@@ -148,26 +151,85 @@ class DisplayManager:
         """
         success = True
         
-        # First disable any displays marked for disabling
-        for display_name, settings in config.items():
-            if settings.get('enabled') is False:
-                if not self.disable_display(display_name):
-                    success = False
+        logger.debug(f"Configuring displays with config: {config}")
         
-        # Then enable displays
+        # Find which display should be primary and get a list of all enabled displays
+        primary_display = None
+        enabled_displays = []
+        disabled_displays = []
+        
         for display_name, settings in config.items():
             if settings.get('enabled') is True:
-                resolution = settings.get('resolution')
-                position = settings.get('position', '--right-of')
-                relative_to = settings.get('relative_to')
-                
-                if not self.enable_display(display_name, resolution, position, relative_to):
-                    success = False
+                enabled_displays.append(display_name)
+                if settings.get('primary') is True:
+                    primary_display = display_name
+            else:
+                disabled_displays.append(display_name)
         
-        # Finally set primary
-        for display_name, settings in config.items():
-            if settings.get('primary') is True:
-                if not self.set_primary(display_name):
+        # First turn off all displays
+        logger.debug("Disabling all displays first to reset configuration")
+        self.refresh() # Make sure we have the latest display info
+        for display in self.displays:
+            display_name = display['name']
+            logger.debug(f"Disabling display: {display_name}")
+            self.disable_display(display_name)
+        
+        # Then enable the primary display first (if set)
+        if primary_display:
+            display_settings = config[primary_display]
+            logger.debug(f"Enabling primary display first: {primary_display}")
+            
+            resolution = display_settings.get('resolution')
+            
+            # For primary, don't set position relative to anything since it's first
+            cmd = f"xrandr --output {display_settings['name']} --auto --primary"
+            if resolution:
+                cmd += f" --mode {resolution}"
+                
+            logger.debug(f"Executing primary display command: {cmd}")
+            result = run_command(cmd)
+            
+            if result.returncode != 0:
+                logger.error(f"Failed to enable primary display: {result.stderr}")
+                success = False
+            else:
+                logger.debug(f"Successfully enabled primary display: {primary_display}")
+                # Remove primary from the list of displays to enable
+                enabled_displays.remove(primary_display)
+        
+        # Then enable other displays relative to the primary or the first one enabled
+        reference_display = primary_display if primary_display else None
+        
+        for display_name in enabled_displays:
+            if not reference_display:
+                reference_display = display_name
+                
+            settings = config[display_name]
+            logger.debug(f"Enabling secondary display: {display_name}")
+            
+            resolution = settings.get('resolution')
+            position = settings.get('position', '--right-of')
+            relative_to = settings.get('relative_to', reference_display)
+            
+            # Enable this display
+            if not self.enable_display(display_name, resolution, position, relative_to):
+                success = False
+        
+        # Verify that the primary setting was applied
+        if primary_display and success:
+            self.refresh()  # Refresh display list
+            primary_set = False
+            
+            for display in self.displays:
+                if display['name'] == config[primary_display]['name'] and display.get('primary'):
+                    primary_set = True
+                    break
+                    
+            if not primary_set:
+                # Try one more time to set the primary display
+                logger.debug(f"Trying one more time to set {primary_display} as primary")
+                if not self.set_primary(primary_display):
+                    logger.warning(f"Failed to set {primary_display} as primary display")
                     success = False
         
         return success
@@ -181,3 +243,45 @@ class DisplayManager:
         """
         self.refresh()
         return {"displays": self.displays}
+
+    def _enable_display_as_primary(self, display_name: str, resolution: str = None, 
+                                 position: str = None, relative_to: str = None) -> bool:
+        """
+        Enable a display and set it as primary in one operation.
+        
+        Args:
+            display_name: Name of the display to enable
+            resolution: Optional resolution string (e.g. "1920x1080")
+            position: Optional position flag (e.g. "--right-of", "--left-of")
+            relative_to: Optional display name to position relative to
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        display = self.get_display(display_name)
+        if not display:
+            logger.error(f"Display {display_name} not found")
+            return False
+            
+        # Build xrandr command
+        cmd = f"xrandr --output {display['name']} --auto --primary"
+        
+        if resolution:
+            cmd += f" --mode {resolution}"
+            
+        if position and relative_to:
+            # Check if the relative display exists
+            relative_display = self.get_display(relative_to)
+            if relative_display:
+                cmd += f" {position} {relative_display['name']}"
+                
+        logger.debug(f"Executing enable as primary command: {cmd}")
+        result = run_command(cmd)
+        
+        if result.returncode != 0:
+            logger.error(f"Failed to enable display as primary: {result.stderr}")
+            return False
+            
+        logger.debug(f"Enabled {display_name} as primary display successfully")
+        self.refresh()
+        return True

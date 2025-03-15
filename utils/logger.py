@@ -34,6 +34,9 @@ f_handler.setFormatter(f_format)
 logger.addHandler(c_handler)
 logger.addHandler(f_handler)
 
+# Set a higher logging level for debugging
+logger.setLevel(logging.DEBUG)
+
 def set_verbose(verbose: bool = True) -> None:
     """
     Set the verbosity level of the logger.

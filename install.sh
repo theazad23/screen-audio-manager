@@ -1,12 +1,28 @@
 #!/bin/bash
 # Installation script for Screen and Audio Manager
 
+# Parse arguments
+DEV_MODE=0
+for arg in "$@"; do
+  case $arg in
+    --dev)
+      DEV_MODE=1
+      shift
+      ;;
+  esac
+done
+
 set -e
 
 echo "=== Screen and Audio Manager Installation ==="
+if [ $DEV_MODE -eq 1 ]; then
+  echo "Installing in DEVELOPMENT MODE"
+  echo "Changes to source files will be immediately available"
+fi
 echo
 
 # Define paths
+SRC_DIR="$(pwd)"
 INSTALL_DIR="${HOME}/.local/bin/screen-audio-manager"
 CONFIG_DIR="${HOME}/.config/screen-audio-manager"
 DATA_DIR="${HOME}/.local/share/screen-audio-manager"
@@ -19,14 +35,29 @@ mkdir -p "${CONFIG_DIR}"
 mkdir -p "${DATA_DIR}/logs"
 mkdir -p "${BIN_DIR}"
 
-# Copy files
-echo "Copying files..."
-cp -r ./config "${INSTALL_DIR}/"
-cp -r ./core "${INSTALL_DIR}/"
-cp -r ./macros "${INSTALL_DIR}/"
-cp -r ./utils "${INSTALL_DIR}/"
-cp ./__init__.py "${INSTALL_DIR}/"
-cp ./main.py "${INSTALL_DIR}/"
+# Copy or link files based on mode
+echo "Installing files..."
+
+if [ $DEV_MODE -eq 1 ]; then
+  # Development mode: use symbolic links
+  ln -sf "${SRC_DIR}/config" "${INSTALL_DIR}/"
+  ln -sf "${SRC_DIR}/core" "${INSTALL_DIR}/"
+  ln -sf "${SRC_DIR}/macros" "${INSTALL_DIR}/"
+  ln -sf "${SRC_DIR}/utils" "${INSTALL_DIR}/"
+  ln -sf "${SRC_DIR}/__init__.py" "${INSTALL_DIR}/"
+  ln -sf "${SRC_DIR}/main.py" "${INSTALL_DIR}/"
+  
+  echo "Using symbolic links in development mode"
+else
+  # Production mode: copy files
+  rm -rf "${INSTALL_DIR}/config" "${INSTALL_DIR}/core" "${INSTALL_DIR}/macros" "${INSTALL_DIR}/utils"
+  cp -r ./config "${INSTALL_DIR}/"
+  cp -r ./core "${INSTALL_DIR}/"
+  cp -r ./macros "${INSTALL_DIR}/"
+  cp -r ./utils "${INSTALL_DIR}/"
+  cp ./__init__.py "${INSTALL_DIR}/"
+  cp ./main.py "${INSTALL_DIR}/"
+fi
 
 # Create wrapper script
 echo "Creating wrapper script..."
@@ -106,5 +137,8 @@ echo "Running initial device detection..."
 
 echo
 echo "Installation complete!"
+if [ $DEV_MODE -eq 1 ]; then
+  echo "DEVELOPMENT MODE: Any changes to files in ${SRC_DIR} will be immediately available"
+fi
 echo "Run 'sam --help' for usage information."
 echo
